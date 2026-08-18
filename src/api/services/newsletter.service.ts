@@ -3,7 +3,7 @@ import type { WAMonitoringService } from '@api/services/monitor.service';
 import { Integration } from '@api/types/wa.types';
 import { Logger } from '@config/logger.config';
 import { BadRequestException, NotFoundException } from '@exceptions';
-import { getUrlInfo, WAMediaUploadFunction, WAUrlInfo } from 'baileys';
+import { extractUrlFromText, getUrlInfo, WAUrlInfo } from 'baileys';
 
 const UNKNOWN_BAILEYS_ERROR = 'Unknown Baileys error';
 const MAX_ERROR_MESSAGE_LENGTH = 500;
@@ -11,10 +11,6 @@ const LINK_PREVIEW_THUMBNAIL_WIDTH = 192;
 const LINK_PREVIEW_TIMEOUT_MS = 5_000;
 
 type LinkPreviewResolver = typeof getUrlInfo;
-type NewsletterMediaUpload = (
-  filePath: string,
-  options: Parameters<WAMediaUploadFunction>[1] & { newsletter: true },
-) => ReturnType<WAMediaUploadFunction>;
 
 const readErrorValue = (value: unknown): string | undefined => {
   if (typeof value === 'string') {
@@ -74,24 +70,21 @@ export class NewsletterService {
 
   private readonly logger = new Logger('NewsletterService');
 
-  private async generateLinkPreview(text: string, uploadToServer?: WAMediaUploadFunction): Promise<WAUrlInfo | null> {
+  private async generateLinkPreview(text: string): Promise<WAUrlInfo | null> {
+    const url = extractUrlFromText(text);
+
+    if (!url) {
+      return null;
+    }
+
     try {
-      const uploadImage: WAMediaUploadFunction | undefined = uploadToServer
-        ? (filePath, options) =>
-            (uploadToServer as NewsletterMediaUpload)(filePath, {
-              ...options,
-              mediaType: 'thumbnail-link',
-              newsletter: true,
-            })
-        : undefined;
-      const preview = await this.resolveLinkPreview(text, {
+      const preview = await this.resolveLinkPreview(url, {
         thumbnailWidth: LINK_PREVIEW_THUMBNAIL_WIDTH,
         fetchOpts: { timeout: LINK_PREVIEW_TIMEOUT_MS },
-        uploadImage,
       });
 
-      if (!preview?.jpegThumbnail?.length) {
-        this.logger.warn('newsletter.linkPreview could not generate a JPEG thumbnail');
+      if (!preview?.originalThumbnailUrl || !preview.jpegThumbnail?.length) {
+        this.logger.warn('newsletter.linkPreview could not resolve a usable image');
         return null;
       }
 
@@ -133,9 +126,26 @@ export class NewsletterService {
     this.logger.verbose(`newsletter.sendText to ${data.jid}`);
 
     try {
-      const linkPreview =
-        data.linkPreview === false ? null : await this.generateLinkPreview(data.text, instance.client.waUploadToServer);
-      const result = await instance.client.sendMessage(data.jid, { text: data.text, linkPreview });
+      const linkPreview = data.linkPreview === false ? null : await this.generateLinkPreview(data.text);
+      let result;
+      let linkPreviewGenerated = false;
+
+      if (linkPreview) {
+        try {
+          result = await instance.client.sendMessage(data.jid, {
+            image: { url: linkPreview.originalThumbnailUrl },
+            caption: data.text,
+            jpegThumbnail: linkPreview.jpegThumbnail.toString('base64'),
+          });
+          linkPreviewGenerated = true;
+        } catch {
+          this.logger.warn('newsletter.linkPreview image publishing failed; falling back to plain text');
+        }
+      }
+
+      if (!linkPreviewGenerated) {
+        result = await instance.client.sendMessage(data.jid, { text: data.text, linkPreview: null });
+      }
       const messageId = result?.key?.id;
 
       this.logger.info(`newsletter.sendText sent to ${data.jid}${messageId ? ` (${messageId})` : ''}`);
@@ -144,7 +154,7 @@ export class NewsletterService {
         status: 'success',
         jid: data.jid,
         messageId: messageId ?? null,
-        linkPreviewGenerated: Boolean(linkPreview),
+        linkPreviewGenerated,
       };
     } catch (error) {
       const message = normalizeNewsletterError(error);

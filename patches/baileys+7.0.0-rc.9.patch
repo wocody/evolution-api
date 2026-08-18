@@ -1,7 +1,86 @@
+diff --git a/node_modules/baileys/lib/Defaults/index.d.ts b/node_modules/baileys/lib/Defaults/index.d.ts
+index a54f72e..072e164 100644
+--- a/node_modules/baileys/lib/Defaults/index.d.ts
++++ b/node_modules/baileys/lib/Defaults/index.d.ts
+@@ -26,6 +26,9 @@ export declare const DEFAULT_CONNECTION_CONFIG: SocketConfig;
+ export declare const MEDIA_PATH_MAP: {
+     [T in MediaType]?: string;
+ };
++export declare const NEWSLETTER_MEDIA_PATH_MAP: {
++    [T in MediaType]?: string;
++};
+ export declare const MEDIA_HKDF_KEY_MAPPING: {
+     audio: string;
+     document: string;
+diff --git a/node_modules/baileys/lib/Defaults/index.js b/node_modules/baileys/lib/Defaults/index.js
+index 7651b27..604d7e9 100644
+--- a/node_modules/baileys/lib/Defaults/index.js
++++ b/node_modules/baileys/lib/Defaults/index.js
+@@ -80,6 +80,17 @@ export const MEDIA_PATH_MAP = {
+     'md-msg-hist': '/mms/md-app-state',
+     'biz-cover-photo': '/pps/biz-cover-photo'
+ };
++export const NEWSLETTER_MEDIA_PATH_MAP = {
++    image: '/newsletter/newsletter-image',
++    video: '/newsletter/newsletter-video',
++    document: '/newsletter/newsletter-document',
++    audio: '/newsletter/newsletter-audio',
++    gif: '/newsletter/newsletter-gif',
++    ptt: '/newsletter/newsletter-ptt',
++    ptv: '/newsletter/newsletter-ptv',
++    sticker: '/newsletter/newsletter-sticker-pack',
++    'thumbnail-link': '/newsletter/newsletter-image'
++};
+ export const MEDIA_HKDF_KEY_MAPPING = {
+     audio: 'Audio',
+     document: 'Document',
+diff --git a/node_modules/baileys/lib/Socket/messages-send.js b/node_modules/baileys/lib/Socket/messages-send.js
+index 074978f..095f833 100644
+--- a/node_modules/baileys/lib/Socket/messages-send.js
++++ b/node_modules/baileys/lib/Socket/messages-send.js
+@@ -448,7 +448,7 @@ export const makeMessagesSocket = (config) => {
+                 const bytes = encodeNewsletterMessage(patched);
+                 binaryNodeContent.push({
+                     tag: 'plaintext',
+-                    attrs: {},
++                    attrs: mediaType ? { mediatype: mediaType } : {},
+                     content: bytes
+                 });
+                 const stanza = {
+diff --git a/node_modules/baileys/lib/Types/Message.d.ts b/node_modules/baileys/lib/Types/Message.d.ts
+index 2b170db..6121b3c 100644
+--- a/node_modules/baileys/lib/Types/Message.d.ts
++++ b/node_modules/baileys/lib/Types/Message.d.ts
+@@ -249,12 +249,15 @@ export type WAMediaUploadFunction = (encFilePath: string, opts: {
+     fileEncSha256B64: string;
+     mediaType: MediaType;
+     timeoutMs?: number;
++    newsletter?: boolean;
+ }) => Promise<{
+-    mediaUrl: string;
++    mediaUrl: string | undefined;
+     directPath: string;
+     meta_hmac?: string;
+     ts?: number;
+     fbid?: number;
++    thumbnailDirectPath?: string;
++    thumbnailSha256?: string;
+ }>;
+ export type MediaGenerationOptions = {
+     logger?: ILogger;
 diff --git a/node_modules/baileys/lib/Utils/messages-media.js b/node_modules/baileys/lib/Utils/messages-media.js
-index 0d32dfb..a4ff14d 100644
+index 0d32dfb..444038c 100644
 --- a/node_modules/baileys/lib/Utils/messages-media.js
 +++ b/node_modules/baileys/lib/Utils/messages-media.js
+@@ -8,7 +8,7 @@ import { join } from 'path';
+ import { Readable, Transform } from 'stream';
+ import { URL } from 'url';
+ import { proto } from '../../WAProto/index.js';
+-import { DEFAULT_ORIGIN, MEDIA_HKDF_KEY_MAPPING, MEDIA_PATH_MAP } from '../Defaults/index.js';
++import { DEFAULT_ORIGIN, MEDIA_HKDF_KEY_MAPPING, MEDIA_PATH_MAP, NEWSLETTER_MEDIA_PATH_MAP } from '../Defaults/index.js';
+ import { getBinaryNodeChild, getBinaryNodeChildBuffer, jidNormalizedUser } from '../WABinary/index.js';
+ import { aesDecryptGCM, aesEncryptGCM, hkdf } from './crypto.js';
+ import { generateMessageIDV2 } from './generics.js';
 @@ -507,7 +507,7 @@ export function extensionForMediaMessage(message) {
      return extension;
  }
@@ -11,16 +90,67 @@ index 0d32dfb..a4ff14d 100644
          // send a query JSON to obtain the url & auth token to upload our media
          let uploadInfo = await refreshMediaConn(false);
          let urls;
-@@ -516,7 +516,11 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
+@@ -516,7 +516,14 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
          for (const { hostname } of hosts) {
              logger.debug(`uploading to "${hostname}"`);
              const auth = encodeURIComponent(uploadInfo.auth); // the auth token
 -            const url = `https://${hostname}${MEDIA_PATH_MAP[mediaType]}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}`;
-+            const mediaPath = newsletter && mediaType === 'thumbnail-link'
-+                ? '/newsletter/newsletter-thumbnail-link'
-+                : MEDIA_PATH_MAP[mediaType];
-+            const serverThumbnail = newsletter ? '&server_thumb_gen=1' : '';
-+            const url = `https://${hostname}${mediaPath}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}${serverThumbnail}`;
++            const mediaPath = (newsletter ? NEWSLETTER_MEDIA_PATH_MAP[mediaType] : undefined) || MEDIA_PATH_MAP[mediaType];
++            let url = `https://${hostname}${mediaPath}/${fileEncSha256B64}?auth=${auth}&token=${fileEncSha256B64}`;
++            if (newsletter) {
++                url += '&server_thumb_gen=1';
++                if (mediaType === 'video' || mediaType === 'gif' || mediaType === 'ptv') {
++                    url += '&server_transcode=1';
++                }
++            }
              // eslint-disable-next-line @typescript-eslint/no-explicit-any
              let result;
              try {
+@@ -547,13 +554,15 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
+                     parsed = undefined;
+                 }
+                 result = parsed;
+-                if (result?.url || result?.directPath) {
++                if (result?.url || result?.direct_path) {
+                     urls = {
+-                        mediaUrl: result.url,
++                        mediaUrl: result.url || result.direct_path,
+                         directPath: result.direct_path,
+                         meta_hmac: result.meta_hmac,
+                         fbid: result.fbid,
+-                        ts: result.ts
++                        ts: result.ts,
++                        thumbnailDirectPath: result.thumbnail_info?.thumbnail_direct_path,
++                        thumbnailSha256: result.thumbnail_info?.thumbnail_sha256
+                     };
+                     break;
+                 }
+diff --git a/node_modules/baileys/lib/Utils/messages.js b/node_modules/baileys/lib/Utils/messages.js
+index eff7a53..0420106 100644
+--- a/node_modules/baileys/lib/Utils/messages.js
++++ b/node_modules/baileys/lib/Utils/messages.js
+@@ -100,19 +100,21 @@ export const prepareWAMessageMedia = async (message, options) => {
+         logger?.info({ key: cacheableKey }, 'Preparing raw media for newsletter');
+         const { filePath, fileSha256, fileLength } = await getRawMediaUploadData(uploadData.media, options.mediaTypeOverride || mediaType, logger);
+         const fileSha256B64 = fileSha256.toString('base64');
+-        const { mediaUrl, directPath } = await options.upload(filePath, {
++        const { directPath, thumbnailDirectPath, thumbnailSha256 } = await options.upload(filePath, {
+             fileEncSha256B64: fileSha256B64,
+             mediaType: mediaType,
+-            timeoutMs: options.mediaUploadTimeoutMs
++            timeoutMs: options.mediaUploadTimeoutMs,
++            newsletter: true
+         });
+         await fs.unlink(filePath);
+         const obj = WAProto.Message.fromObject({
+             // todo: add more support here
+             [`${mediaType}Message`]: MessageTypeProto[mediaType].fromObject({
+-                url: mediaUrl,
+                 directPath,
+                 fileSha256,
+                 fileLength,
++                thumbnailDirectPath,
++                thumbnailSha256: thumbnailSha256 ? Buffer.from(thumbnailSha256, 'base64') : undefined,
+                 ...uploadData,
+                 media: undefined
+             })

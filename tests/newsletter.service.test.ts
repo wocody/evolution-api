@@ -11,32 +11,22 @@ describe('NewsletterService', () => {
     'canonical-url': 'https://example.com/article',
     'matched-text': 'https://example.com/article',
     jpegThumbnail: Buffer.from('jpeg-thumbnail'),
+    originalThumbnailUrl: 'https://example.com/image.jpg',
     title: 'Article title',
   };
 
   let sendMessage: ReturnType<typeof mock.fn>;
-  let waUploadToServer: ReturnType<typeof mock.fn>;
   let resolveLinkPreview: ReturnType<typeof mock.fn>;
   let instance: Record<string, any>;
   let service: NewsletterService;
 
   beforeEach(() => {
     sendMessage = mock.fn(async () => ({ key: { id: 'message-id' } }));
-    waUploadToServer = mock.fn(async () => ({
-      mediaUrl: 'https://mmg.whatsapp.net/newsletter-thumbnail',
-      directPath: '/m1/newsletter-thumbnail',
-    }));
-    resolveLinkPreview = mock.fn(async (_text, options) => {
-      await options.uploadImage?.('/tmp/encrypted-thumbnail', {
-        fileEncSha256B64: 'thumbnail-sha256',
-        mediaType: 'image',
-      });
-      return generatedPreview;
-    });
+    resolveLinkPreview = mock.fn(async () => generatedPreview);
     instance = {
       integration: 'WHATSAPP-BAILEYS',
       connectionStatus: { state: 'open' },
-      client: { sendMessage, waUploadToServer },
+      client: { sendMessage },
     };
     service = new NewsletterService(
       { waInstances: { [INSTANCE_NAME]: instance } } as any,
@@ -44,28 +34,23 @@ describe('NewsletterService', () => {
     );
   });
 
-  it('generates and forwards an explicit JPEG link preview by default', async () => {
+  it('publishes the Open Graph image with the original text as its caption by default', async () => {
     const text = 'Publication https://example.com/article';
     const response = await service.sendText(INSTANCE_NAME, { jid: NEWSLETTER_JID, text });
 
     const [resolvedText, options] = resolveLinkPreview.mock.calls[0].arguments;
-    assert.equal(resolvedText, text);
+    assert.equal(resolvedText, 'https://example.com/article');
     assert.deepEqual(
       { fetchOpts: options.fetchOpts, thumbnailWidth: options.thumbnailWidth },
       { fetchOpts: { timeout: 5_000 }, thumbnailWidth: 192 },
     );
-    assert.equal(typeof options.uploadImage, 'function');
-    assert.deepEqual(waUploadToServer.mock.calls[0].arguments, [
-      '/tmp/encrypted-thumbnail',
-      {
-        fileEncSha256B64: 'thumbnail-sha256',
-        mediaType: 'thumbnail-link',
-        newsletter: true,
-      },
-    ]);
     assert.deepEqual(sendMessage.mock.calls[0].arguments, [
       NEWSLETTER_JID,
-      { text, linkPreview: generatedPreview },
+      {
+        image: { url: 'https://example.com/image.jpg' },
+        caption: text,
+        jpegThumbnail: Buffer.from('jpeg-thumbnail').toString('base64'),
+      },
     ]);
     assert.deepEqual(response, {
       status: 'success',
@@ -83,7 +68,6 @@ describe('NewsletterService', () => {
     });
 
     assert.equal(resolveLinkPreview.mock.callCount(), 0);
-    assert.equal(waUploadToServer.mock.callCount(), 0);
     assert.deepEqual(sendMessage.mock.calls[0].arguments, [
       NEWSLETTER_JID,
       { text: 'Publication https://example.com/article', linkPreview: null },
@@ -105,6 +89,41 @@ describe('NewsletterService', () => {
       NEWSLETTER_JID,
       { text: 'Publication https://example.com/article', linkPreview: null },
     ]);
+  });
+
+  it('falls back to plain text when the preview does not contain an original image URL', async () => {
+    resolveLinkPreview.mock.mockImplementationOnce(async () => ({
+      ...generatedPreview,
+      originalThumbnailUrl: undefined,
+    }));
+
+    await service.sendText(INSTANCE_NAME, {
+      jid: NEWSLETTER_JID,
+      text: 'Publication https://example.com/article',
+    });
+
+    assert.deepEqual(sendMessage.mock.calls[0].arguments, [
+      NEWSLETTER_JID,
+      { text: 'Publication https://example.com/article', linkPreview: null },
+    ]);
+  });
+
+  it('falls back to plain text when image publishing fails', async () => {
+    sendMessage.mock.mockImplementationOnce(async () => {
+      throw new Error('Newsletter image upload failed');
+    });
+
+    const response = await service.sendText(INSTANCE_NAME, {
+      jid: NEWSLETTER_JID,
+      text: 'Publication https://example.com/article',
+    });
+
+    assert.equal(sendMessage.mock.callCount(), 2);
+    assert.deepEqual(sendMessage.mock.calls[1].arguments, [
+      NEWSLETTER_JID,
+      { text: 'Publication https://example.com/article', linkPreview: null },
+    ]);
+    assert.equal(response.linkPreviewGenerated, false);
   });
 
   it('still publishes plain text when preview generation fails', async () => {
@@ -171,6 +190,7 @@ describe('NewsletterService', () => {
   });
 
   it('normalizes errors from Baileys without exposing credentials', async () => {
+    resolveLinkPreview.mock.mockImplementationOnce(async () => null);
     sendMessage.mock.mockImplementationOnce(async () => {
       throw {
         output: { payload: { message: 'Not authorized; access_token=secret-value' } },

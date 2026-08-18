@@ -18,14 +18,19 @@ The endpoint only accepts complete `@newsletter` JIDs. It reuses the connected
 `WHATSAPP-BAILEYS` instance and its existing socket; it does not create another
 WhatsApp session and does not change `/message/sendText/:instanceName`.
 
-`linkPreview` is optional and defaults to `true`. When enabled, the endpoint
-fetches the first URL in `text`, generates a JPEG thumbnail, uploads the
-high-quality thumbnail through the connected socket using WhatsApp's dedicated
-Newsletter CDN path, and sends the resulting metadata explicitly to Baileys.
-If metadata, thumbnail generation, or upload fails, the publication continues
-as plain text. Set `"linkPreview": false` to skip preview generation.
+`linkPreview` is optional and defaults to `true`. WhatsApp Channels do not
+reliably render the regular `extendedTextMessage` preview used by private and
+group conversations. When enabled, this endpoint extracts the first URL from
+`text`, resolves its Open Graph image, and publishes that image as a Newsletter
+`imageMessage`, with the original text and URL preserved in the caption. This
+matches the format used by news publications in the official client.
 
-The `patch-package` postinstall step applies the Newsletter thumbnail upload fix
+Newsletter images are uploaded through WhatsApp's dedicated Newsletter CDN
+path. If URL metadata, image resolution, or image upload fails, the publication
+continues as plain text. Set `"linkPreview": false` to skip image resolution and
+always publish plain text.
+
+The `patch-package` postinstall step applies the Newsletter media upload fix
 required by Baileys 7.0.0-rc.9 after every `npm install` or `npm ci`.
 
 ## Local checks
@@ -62,9 +67,9 @@ A successful response has HTTP status `201` and this shape:
 }
 ```
 
-`linkPreviewGenerated` confirms that metadata and a thumbnail were generated
-and uploaded before publishing. It is `false` when previews are disabled or the
-preview pipeline falls back to plain text.
+`linkPreviewGenerated` confirms that the Open Graph image was published with
+the text as its caption. It is `false` when previews are disabled or the image
+pipeline falls back to plain text.
 
 The connected account must be allowed to publish in the target Channel. Run the
 real request only against a controlled staging instance and Channel. Also verify
