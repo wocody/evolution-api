@@ -9,6 +9,17 @@ describe('newsletterTextMessageSchema', () => {
 
   it('accepts a complete newsletter JID and non-empty text', () => {
     assert.equal(isValid({ jid: '120363429376422315@newsletter', text: 'Publication' }), true);
+    assert.equal(
+      isValid({ jid: '120363429376422315@newsletter', text: 'Publication', linkPreview: true }),
+      true,
+    );
+  });
+
+  it('rejects a non-boolean linkPreview option', () => {
+    assert.equal(
+      isValid({ jid: '120363429376422315@newsletter', text: 'Publication', linkPreview: 'true' }),
+      false,
+    );
   });
 
   it('rejects a missing JID', () => {

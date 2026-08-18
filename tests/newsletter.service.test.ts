@@ -7,25 +7,92 @@ const INSTANCE_NAME = 'Canais CPG';
 const NEWSLETTER_JID = '120363429376422315@newsletter';
 
 describe('NewsletterService', () => {
+  const generatedPreview = {
+    'canonical-url': 'https://example.com/article',
+    'matched-text': 'https://example.com/article',
+    jpegThumbnail: Buffer.from('jpeg-thumbnail'),
+    title: 'Article title',
+  };
+
   let sendMessage: ReturnType<typeof mock.fn>;
+  let resolveLinkPreview: ReturnType<typeof mock.fn>;
   let instance: Record<string, any>;
   let service: NewsletterService;
 
   beforeEach(() => {
     sendMessage = mock.fn(async () => ({ key: { id: 'message-id' } }));
+    resolveLinkPreview = mock.fn(async () => generatedPreview);
     instance = {
       integration: 'WHATSAPP-BAILEYS',
       connectionStatus: { state: 'open' },
       client: { sendMessage },
     };
-    service = new NewsletterService({ waInstances: { [INSTANCE_NAME]: instance } } as any);
+    service = new NewsletterService(
+      { waInstances: { [INSTANCE_NAME]: instance } } as any,
+      resolveLinkPreview as any,
+    );
   });
 
-  it('forwards the exact JID and text to the existing Baileys socket', async () => {
-    const response = await service.sendText(INSTANCE_NAME, { jid: NEWSLETTER_JID, text: 'Publication' });
+  it('generates and forwards an explicit JPEG link preview by default', async () => {
+    const text = 'Publication https://example.com/article';
+    const response = await service.sendText(INSTANCE_NAME, { jid: NEWSLETTER_JID, text });
 
-    assert.deepEqual(sendMessage.mock.calls[0].arguments, [NEWSLETTER_JID, { text: 'Publication' }]);
+    assert.deepEqual(resolveLinkPreview.mock.calls[0].arguments, [
+      text,
+      { fetchOpts: { timeout: 5_000 }, thumbnailWidth: 192 },
+    ]);
+    assert.deepEqual(sendMessage.mock.calls[0].arguments, [
+      NEWSLETTER_JID,
+      { text, linkPreview: generatedPreview },
+    ]);
     assert.deepEqual(response, { status: 'success', jid: NEWSLETTER_JID, messageId: 'message-id' });
+  });
+
+  it('can disable link previews explicitly', async () => {
+    await service.sendText(INSTANCE_NAME, {
+      jid: NEWSLETTER_JID,
+      text: 'Publication https://example.com/article',
+      linkPreview: false,
+    });
+
+    assert.equal(resolveLinkPreview.mock.callCount(), 0);
+    assert.deepEqual(sendMessage.mock.calls[0].arguments, [
+      NEWSLETTER_JID,
+      { text: 'Publication https://example.com/article', linkPreview: null },
+    ]);
+  });
+
+  it('falls back to plain text when no JPEG thumbnail can be generated', async () => {
+    resolveLinkPreview.mock.mockImplementationOnce(async () => ({
+      ...generatedPreview,
+      jpegThumbnail: undefined,
+    }));
+
+    await service.sendText(INSTANCE_NAME, {
+      jid: NEWSLETTER_JID,
+      text: 'Publication https://example.com/article',
+    });
+
+    assert.deepEqual(sendMessage.mock.calls[0].arguments, [
+      NEWSLETTER_JID,
+      { text: 'Publication https://example.com/article', linkPreview: null },
+    ]);
+  });
+
+  it('still publishes plain text when preview generation fails', async () => {
+    resolveLinkPreview.mock.mockImplementationOnce(async () => {
+      throw new Error('private preview failure');
+    });
+
+    await service.sendText(INSTANCE_NAME, {
+      jid: NEWSLETTER_JID,
+      text: 'Publication https://example.com/article',
+    });
+
+    assert.deepEqual(sendMessage.mock.calls[0].arguments, [
+      NEWSLETTER_JID,
+      { text: 'Publication https://example.com/article', linkPreview: null },
+    ]);
   });
 
   it('rejects a missing or non-newsletter JID', async () => {
@@ -49,7 +116,7 @@ describe('NewsletterService', () => {
   });
 
   it('returns not found when the instance is absent', async () => {
-    const missingInstanceService = new NewsletterService({ waInstances: {} } as any);
+    const missingInstanceService = new NewsletterService({ waInstances: {} } as any, resolveLinkPreview as any);
 
     await assert.rejects(
       missingInstanceService.sendText(INSTANCE_NAME, { jid: NEWSLETTER_JID, text: 'Publication' }),

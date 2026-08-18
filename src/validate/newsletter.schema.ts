@@ -15,6 +15,10 @@ export const newsletterTextMessageSchema: JSONSchema7 = {
       minLength: 1,
       description: 'Text is required',
     },
+    linkPreview: {
+      type: 'boolean',
+      description: 'linkPreview must be a boolean',
+    },
   },
   required: ['jid', 'text'],
 };

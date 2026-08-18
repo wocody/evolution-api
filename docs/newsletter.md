@@ -9,13 +9,20 @@ Content-Type: application/json
 
 {
   "jid": "120363429376422315@newsletter",
-  "text": "Channel publication"
+  "text": "Channel publication https://example.com/article",
+  "linkPreview": true
 }
 ```
 
 The endpoint only accepts complete `@newsletter` JIDs. It reuses the connected
 `WHATSAPP-BAILEYS` instance and its existing socket; it does not create another
 WhatsApp session and does not change `/message/sendText/:instanceName`.
+
+`linkPreview` is optional and defaults to `true`. When enabled, the endpoint
+fetches the first URL in `text`, generates an inline JPEG thumbnail, and sends
+the resulting metadata explicitly to Baileys. If metadata or thumbnail
+generation fails, the publication continues as plain text. Set
+`"linkPreview": false` to skip preview generation.
 
 ## Local checks
 
@@ -35,7 +42,8 @@ curl -i --request POST \
   --header 'apikey: REPLACE_WITH_A_TEST_KEY' \
   --data '{
     "jid": "120363429376422315@newsletter",
-    "text": "Controlled staging publication"
+    "text": "Controlled staging publication https://example.com/article",
+    "linkPreview": true
   }'
 ```
 

@@ -3,9 +3,14 @@ import type { WAMonitoringService } from '@api/services/monitor.service';
 import { Integration } from '@api/types/wa.types';
 import { Logger } from '@config/logger.config';
 import { BadRequestException, NotFoundException } from '@exceptions';
+import { getUrlInfo, WAUrlInfo } from 'baileys';
 
 const UNKNOWN_BAILEYS_ERROR = 'Unknown Baileys error';
 const MAX_ERROR_MESSAGE_LENGTH = 500;
+const LINK_PREVIEW_THUMBNAIL_WIDTH = 192;
+const LINK_PREVIEW_TIMEOUT_MS = 5_000;
+
+type LinkPreviewResolver = typeof getUrlInfo;
 
 const readErrorValue = (value: unknown): string | undefined => {
   if (typeof value === 'string') {
@@ -58,9 +63,31 @@ export const normalizeNewsletterError = (error: unknown): string => {
 };
 
 export class NewsletterService {
-  constructor(private readonly waMonitor: WAMonitoringService) {}
+  constructor(
+    private readonly waMonitor: WAMonitoringService,
+    private readonly resolveLinkPreview: LinkPreviewResolver = getUrlInfo,
+  ) {}
 
   private readonly logger = new Logger('NewsletterService');
+
+  private async generateLinkPreview(text: string): Promise<WAUrlInfo | null> {
+    try {
+      const preview = await this.resolveLinkPreview(text, {
+        thumbnailWidth: LINK_PREVIEW_THUMBNAIL_WIDTH,
+        fetchOpts: { timeout: LINK_PREVIEW_TIMEOUT_MS },
+      });
+
+      if (!preview?.jpegThumbnail?.length) {
+        this.logger.warn('newsletter.linkPreview could not generate a JPEG thumbnail');
+        return null;
+      }
+
+      return preview;
+    } catch {
+      this.logger.warn('newsletter.linkPreview generation failed');
+      return null;
+    }
+  }
 
   public async sendText(instanceName: string, data: SendNewsletterTextDto) {
     if (typeof data?.jid !== 'string' || !data.jid.endsWith('@newsletter')) {
@@ -93,7 +120,8 @@ export class NewsletterService {
     this.logger.verbose(`newsletter.sendText to ${data.jid}`);
 
     try {
-      const result = await instance.client.sendMessage(data.jid, { text: data.text });
+      const linkPreview = data.linkPreview === false ? null : await this.generateLinkPreview(data.text);
+      const result = await instance.client.sendMessage(data.jid, { text: data.text, linkPreview });
       const messageId = result?.key?.id;
 
       this.logger.info(`newsletter.sendText sent to ${data.jid}${messageId ? ` (${messageId})` : ''}`);

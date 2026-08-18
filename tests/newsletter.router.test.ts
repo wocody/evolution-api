@@ -10,11 +10,13 @@ describe('NewsletterRouter', () => {
   let baseUrl: string;
   let server: Server;
   let calls = 0;
+  let lastLinkPreview: boolean | undefined;
 
   before(async () => {
     const controller = {
-      async sendText(instance: { instanceName: string }, data: { jid: string; text: string }) {
+      async sendText(instance: { instanceName: string }, data: { jid: string; text: string; linkPreview?: boolean }) {
         calls += 1;
+        lastLinkPreview = data.linkPreview;
         return { status: 'success', jid: data.jid, messageId: `${instance.instanceName}-id` };
       },
     };
@@ -55,7 +57,7 @@ describe('NewsletterRouter', () => {
     const response = await fetch(`${baseUrl}/newsletter/sendText/Canais%20CPG`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', apikey: 'test-key' },
-      body: JSON.stringify({ jid: '120363429376422315@newsletter', text: 'Publication' }),
+      body: JSON.stringify({ jid: '120363429376422315@newsletter', text: 'Publication', linkPreview: true }),
     });
 
     assert.equal(response.status, 201);
@@ -65,6 +67,7 @@ describe('NewsletterRouter', () => {
       messageId: 'Canais CPG-id',
     });
     assert.equal(calls, 1);
+    assert.equal(lastLinkPreview, true);
   });
 
   it('returns 400 before dispatching an invalid destination', async () => {
