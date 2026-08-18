@@ -19,10 +19,14 @@ The endpoint only accepts complete `@newsletter` JIDs. It reuses the connected
 WhatsApp session and does not change `/message/sendText/:instanceName`.
 
 `linkPreview` is optional and defaults to `true`. When enabled, the endpoint
-fetches the first URL in `text`, generates an inline JPEG thumbnail, and sends
-the resulting metadata explicitly to Baileys. If metadata or thumbnail
-generation fails, the publication continues as plain text. Set
-`"linkPreview": false` to skip preview generation.
+fetches the first URL in `text`, generates a JPEG thumbnail, uploads the
+high-quality thumbnail through the connected socket using WhatsApp's dedicated
+Newsletter CDN path, and sends the resulting metadata explicitly to Baileys.
+If metadata, thumbnail generation, or upload fails, the publication continues
+as plain text. Set `"linkPreview": false` to skip preview generation.
+
+The `patch-package` postinstall step applies the Newsletter thumbnail upload fix
+required by Baileys 7.0.0-rc.9 after every `npm install` or `npm ci`.
 
 ## Local checks
 
@@ -53,9 +57,14 @@ A successful response has HTTP status `201` and this shape:
 {
   "status": "success",
   "jid": "120363429376422315@newsletter",
-  "messageId": "..."
+  "messageId": "...",
+  "linkPreviewGenerated": true
 }
 ```
+
+`linkPreviewGenerated` confirms that metadata and a thumbnail were generated
+and uploaded before publishing. It is `false` when previews are disabled or the
+preview pipeline falls back to plain text.
 
 The connected account must be allowed to publish in the target Channel. Run the
 real request only against a controlled staging instance and Channel. Also verify

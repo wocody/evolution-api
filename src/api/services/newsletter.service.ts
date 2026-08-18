@@ -3,7 +3,7 @@ import type { WAMonitoringService } from '@api/services/monitor.service';
 import { Integration } from '@api/types/wa.types';
 import { Logger } from '@config/logger.config';
 import { BadRequestException, NotFoundException } from '@exceptions';
-import { getUrlInfo, WAUrlInfo } from 'baileys';
+import { getUrlInfo, WAMediaUploadFunction, WAUrlInfo } from 'baileys';
 
 const UNKNOWN_BAILEYS_ERROR = 'Unknown Baileys error';
 const MAX_ERROR_MESSAGE_LENGTH = 500;
@@ -11,6 +11,10 @@ const LINK_PREVIEW_THUMBNAIL_WIDTH = 192;
 const LINK_PREVIEW_TIMEOUT_MS = 5_000;
 
 type LinkPreviewResolver = typeof getUrlInfo;
+type NewsletterMediaUpload = (
+  filePath: string,
+  options: Parameters<WAMediaUploadFunction>[1] & { newsletter: true },
+) => ReturnType<WAMediaUploadFunction>;
 
 const readErrorValue = (value: unknown): string | undefined => {
   if (typeof value === 'string') {
@@ -70,11 +74,20 @@ export class NewsletterService {
 
   private readonly logger = new Logger('NewsletterService');
 
-  private async generateLinkPreview(text: string): Promise<WAUrlInfo | null> {
+  private async generateLinkPreview(text: string, uploadToServer?: WAMediaUploadFunction): Promise<WAUrlInfo | null> {
     try {
+      const uploadImage: WAMediaUploadFunction | undefined = uploadToServer
+        ? (filePath, options) =>
+            (uploadToServer as NewsletterMediaUpload)(filePath, {
+              ...options,
+              mediaType: 'thumbnail-link',
+              newsletter: true,
+            })
+        : undefined;
       const preview = await this.resolveLinkPreview(text, {
         thumbnailWidth: LINK_PREVIEW_THUMBNAIL_WIDTH,
         fetchOpts: { timeout: LINK_PREVIEW_TIMEOUT_MS },
+        uploadImage,
       });
 
       if (!preview?.jpegThumbnail?.length) {
@@ -120,7 +133,8 @@ export class NewsletterService {
     this.logger.verbose(`newsletter.sendText to ${data.jid}`);
 
     try {
-      const linkPreview = data.linkPreview === false ? null : await this.generateLinkPreview(data.text);
+      const linkPreview =
+        data.linkPreview === false ? null : await this.generateLinkPreview(data.text, instance.client.waUploadToServer);
       const result = await instance.client.sendMessage(data.jid, { text: data.text, linkPreview });
       const messageId = result?.key?.id;
 
@@ -130,6 +144,7 @@ export class NewsletterService {
         status: 'success',
         jid: data.jid,
         messageId: messageId ?? null,
+        linkPreviewGenerated: Boolean(linkPreview),
       };
     } catch (error) {
       const message = normalizeNewsletterError(error);
