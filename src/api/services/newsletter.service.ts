@@ -3,6 +3,7 @@ import type { WAMonitoringService } from '@api/services/monitor.service';
 import { Integration } from '@api/types/wa.types';
 import { Logger } from '@config/logger.config';
 import { BadRequestException, NotFoundException } from '@exceptions';
+import { LINK_PREVIEW_FETCH_HEADERS } from '@utils/link-preview.util';
 import { extractUrlFromText, getUrlInfo, WAUrlInfo } from 'baileys';
 
 const UNKNOWN_BAILEYS_ERROR = 'Unknown Baileys error';
@@ -80,7 +81,10 @@ export class NewsletterService {
     try {
       const preview = await this.resolveLinkPreview(url, {
         thumbnailWidth: LINK_PREVIEW_THUMBNAIL_WIDTH,
-        fetchOpts: { timeout: LINK_PREVIEW_TIMEOUT_MS },
+        fetchOpts: {
+          timeout: LINK_PREVIEW_TIMEOUT_MS,
+          headers: LINK_PREVIEW_FETCH_HEADERS,
+        },
       });
 
       if (!preview?.originalThumbnailUrl || !preview.jpegThumbnail?.length) {

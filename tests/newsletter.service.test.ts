@@ -42,7 +42,16 @@ describe('NewsletterService', () => {
     assert.equal(resolvedText, 'https://example.com/article');
     assert.deepEqual(
       { fetchOpts: options.fetchOpts, thumbnailWidth: options.thumbnailWidth },
-      { fetchOpts: { timeout: 5_000 }, thumbnailWidth: 192 },
+      {
+        fetchOpts: {
+          timeout: 5_000,
+          headers: {
+            Accept: 'text/html,application/xhtml+xml,image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+            'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+          },
+        },
+        thumbnailWidth: 192,
+      },
     );
     assert.deepEqual(sendMessage.mock.calls[0].arguments, [
       NEWSLETTER_JID,
